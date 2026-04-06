@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pydantic — Module Dependency Graph</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f1117;
+    color: #e2e8f0;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    padding: 12px 20px;
+    background: #1a1d27;
+    border-bottom: 1px solid #2d3148;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  header h1 { font-size: 15px; font-weight: 600; color: #a78bfa; letter-spacing: 0.3px; }
+  header p  { font-size: 12px; color: #64748b; }
+
+  .legend {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #94a3b8;
+  }
+  .legend-dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  #controls {
+    padding: 8px 20px;
+    background: #1a1d27;
+    border-bottom: 1px solid #2d3148;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+
+  .control-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #94a3b8;
+  }
+
+  input[type=range] {
+    width: 90px;
+    accent-color: #7c3aed;
+  }
+
+  button {
+    padding: 4px 10px;
+    border-radius: 5px;
+    border: 1px solid #374151;
+    background: #1e2235;
+    color: #cbd5e1;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  button:hover { background: #2d3555; border-color: #7c3aed; color: #a78bfa; }
+
+  #search {
+    padding: 4px 8px;
+    border-radius: 5px;
+    border: 1px solid #374151;
+    background: #1e2235;
+    color: #e2e8f0;
+    font-size: 11px;
+    outline: none;
+    width: 150px;
+  }
+  #search:focus { border-color: #7c3aed; }
+
+  #canvas {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+
+  svg { width: 100%; height: 100%; }
+
+  .node circle {
+    stroke-width: 2;
+    cursor: pointer;
+    transition: filter 0.15s;
+  }
+  .node circle:hover { filter: brightness(1.3); }
+
+  .node text {
+    font-size: 10.5px;
+    fill: #cbd5e1;
+    pointer-events: none;
+    dominant-baseline: central;
+  }
+
+  .link {
+    stroke-opacity: 0.35;
+    stroke-width: 1.5;
+    marker-end: url(#arrow);
+  }
+  .link.highlighted { stroke-opacity: 0.9; stroke-width: 2.5; }
+  .link.dimmed       { stroke-opacity: 0.05; }
+
+  .node.dimmed circle { opacity: 0.15; }
+  .node.dimmed text   { opacity: 0.15; }
+
+  #tooltip {
+    position: absolute;
+    background: #1e2235;
+    border: 1px solid #374151;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    max-width: 280px;
+    z-index: 10;
+  }
+  #tooltip h3 { font-size: 13px; color: #a78bfa; margin-bottom: 6px; }
+  #tooltip .tt-row { color: #94a3b8; margin: 2px 0; }
+  #tooltip .tt-row span { color: #e2e8f0; }
+
+  #info-panel {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    background: #1a1d27cc;
+    border: 1px solid #2d3148;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 11px;
+    color: #64748b;
+    backdrop-filter: blur(4px);
+  }
+  #info-panel kbd {
+    background: #2d3148;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 10px;
+    color: #94a3b8;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Pydantic — Module Dependency Graph</h1>
+    <p>Interactive force-directed graph · hover to inspect · click to highlight dependencies</p>
+  </div>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#7c3aed"></div>Entry point</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#2563eb"></div>Public API</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#e07b54"></div>Internal</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#16a34a"></div>Plugin</div>
+  </div>
+</header>
+
+<div id="controls">
+  <div class="control-group">
+    <label>Search</label>
+    <input type="text" id="search" placeholder="module name…">
+  </div>
+  <div class="control-group">
+    <label>Link strength</label>
+    <input type="range" id="strength" min="50" max="400" value="160">
+  </div>
+  <div class="control-group">
+    <label>Charge</label>
+    <input type="range" id="charge" min="-800" max="-100" value="-350">
+  </div>
+  <button id="btn-reset">Reset view</button>
+  <button id="btn-freeze">Freeze layout</button>
+</div>
+
+<div id="canvas">
+  <svg id="svg"></svg>
+  <div id="tooltip"></div>
+  <div id="info-panel">
+    <kbd>scroll</kbd> zoom &nbsp;·&nbsp;
+    <kbd>drag</kbd> pan &nbsp;·&nbsp;
+    <kbd>click node</kbd> highlight &nbsp;·&nbsp;
+    <kbd>esc</kbd> clear
+  </div>
+</div>
+
+<script>
+const nodes = [
+  // id, label, group, loc
+  { id: '__init__',                     label: '__init__',               group: 'entry',    loc: null },
+  { id: 'main',                         label: 'main',                   group: 'public',   loc: 1836 },
+  { id: 'fields',                       label: 'fields',                 group: 'public',   loc: 1892 },
+  { id: 'config',                       label: 'config',                 group: 'public',   loc: 1296 },
+  { id: 'aliases',                      label: 'aliases',                group: 'public',   loc: 135  },
+  { id: 'types',                        label: 'types',                  group: 'public',   loc: 3310 },
+  { id: 'networks',                     label: 'networks',               group: 'public',   loc: 1332 },
+  { id: 'json_schema',                  label: 'json_schema',            group: 'public',   loc: 2914 },
+  { id: 'functional_validators',        label: 'functional_validators',  group: 'public',   loc: 889  },
+  { id: 'functional_serializers',       label: 'functional_serializers', group: 'public',   loc: 470  },
+  { id: 'type_adapter',                 label: 'type_adapter',           group: 'public',   loc: 801  },
+  { id: 'root_model',                   label: 'root_model',             group: 'public',   loc: 250  },
+  { id: 'validate_call_decorator',      label: 'validate_call',          group: 'public',   loc: 180  },
+  { id: '_internal/_model_construction',label: '_model_construction',    group: 'internal', loc: 868  },
+  { id: '_internal/_generate_schema',   label: '_generate_schema',       group: 'internal', loc: 2924 },
+  { id: '_internal/_fields',            label: '_fields',                group: 'internal', loc: 729  },
+  { id: '_internal/_decorators',        label: '_decorators',            group: 'internal', loc: 873  },
+  { id: '_internal/_config',            label: '_config',                group: 'internal', loc: 280  },
+  { id: '_internal/_generics',          label: '_generics',              group: 'internal', loc: 530  },
+  { id: '_internal/_signature',         label: '_signature',             group: 'internal', loc: 200  },
+  { id: 'plugin/_schema_validator',     label: '_schema_validator',      group: 'plugin',   loc: 144  },
+];
+
+const edges = [
+  ['__init__','aliases'],['__init__','config'],['__init__','fields'],
+  ['__init__','functional_serializers'],['__init__','functional_validators'],
+  ['__init__','json_schema'],['__init__','main'],['__init__','networks'],
+  ['__init__','root_model'],['__init__','type_adapter'],['__init__','types'],
+  ['__init__','validate_call_decorator'],
+  ['_internal/_config','aliases'],['_internal/_config','config'],['_internal/_config','fields'],
+  ['_internal/_decorators','_internal/_config'],['_internal/_decorators','fields'],
+  ['_internal/_decorators','functional_validators'],
+  ['_internal/_fields','_internal/_config'],['_internal/_fields','_internal/_decorators'],
+  ['_internal/_fields','aliases'],['_internal/_fields','fields'],['_internal/_fields','main'],
+  ['_internal/_generate_schema','_internal/_config'],['_internal/_generate_schema','_internal/_decorators'],
+  ['_internal/_generate_schema','_internal/_fields'],['_internal/_generate_schema','_internal/_generics'],
+  ['_internal/_generate_schema','aliases'],['_internal/_generate_schema','config'],
+  ['_internal/_generate_schema','fields'],['_internal/_generate_schema','functional_validators'],
+  ['_internal/_generate_schema','json_schema'],['_internal/_generate_schema','main'],
+  ['_internal/_generate_schema','types'],
+  ['_internal/_generics','main'],
+  ['_internal/_model_construction','_internal/_config'],['_internal/_model_construction','_internal/_decorators'],
+  ['_internal/_model_construction','_internal/_fields'],['_internal/_model_construction','_internal/_generate_schema'],
+  ['_internal/_model_construction','_internal/_generics'],['_internal/_model_construction','_internal/_signature'],
+  ['_internal/_model_construction','fields'],['_internal/_model_construction','main'],
+  ['_internal/_model_construction','plugin/_schema_validator'],['_internal/_model_construction','root_model'],
+  ['_internal/_signature','config'],['_internal/_signature','fields'],
+  ['config','_internal/_generate_schema'],['config','aliases'],['config','fields'],
+  ['fields','_internal/_config'],['fields','aliases'],['fields','config'],['fields','json_schema'],
+  ['json_schema','config'],['json_schema','main'],['json_schema','root_model'],['json_schema','type_adapter'],
+  ['main','_internal/_fields'],['main','aliases'],['main','config'],
+  ['main','fields'],['main','json_schema'],['main','plugin/_schema_validator'],
+  ['networks','json_schema'],['networks','type_adapter'],
+  ['root_model','fields'],['root_model','main'],
+  ['type_adapter','config'],['type_adapter','json_schema'],['type_adapter','plugin/_schema_validator'],
+  ['types','json_schema'],
+  ['validate_call_decorator','config'],
+];
+
+// ---------- colours ----------
+const groupColor = {
+  entry:    '#7c3aed',
+  public:   '#2563eb',
+  internal: '#e07b54',
+  plugin:   '#16a34a',
+};
+
+const linkColor = {
+  entry:    '#7c3aed99',
+  public:   '#2563eb99',
+  internal: '#e07b5499',
+  plugin:   '#16a34a99',
+};
+
+// ---------- size by LOC ----------
+const locScale = d3.scaleSqrt().domain([0, 3400]).range([9, 26]);
+function nodeR(d) { return d.loc ? locScale(d.loc) : 10; }
+
+// ---------- setup ----------
+const svg = d3.select('#svg');
+const g   = svg.append('g');
+
+// arrow marker per group
+const defs = svg.append('defs');
+Object.entries(groupColor).forEach(([grp, col]) => {
+  defs.append('marker')
+    .attr('id', `arrow-${grp}`)
+    .attr('viewBox', '0 -4 8 8')
+    .attr('refX', 8).attr('refY', 0)
+    .attr('markerWidth', 6).attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,-4L8,0L0,4')
+    .attr('fill', col);
+});
+
+// ---------- data ----------
+const nodeMap = {};
+nodes.forEach(n => { nodeMap[n.id] = n; });
+
+const links = edges
+  .filter(([s, t]) => nodeMap[s] && nodeMap[t])
+  .map(([s, t]) => ({ source: s, target: t }));
+
+// outDegree map for node label sizing
+const outDegree = {};
+links.forEach(l => {
+  outDegree[l.source] = (outDegree[l.source] || 0) + 1;
+  outDegree[l.target] = (outDegree[l.target] || 0) + 1; // in+out
+});
+
+// ---------- simulation ----------
+let frozen = false;
+const sim = d3.forceSimulation(nodes)
+  .force('link',   d3.forceLink(links).id(d => d.id).distance(+document.getElementById('strength').value))
+  .force('charge', d3.forceManyBody().strength(+document.getElementById('charge').value))
+  .force('center', d3.forceCenter(window.innerWidth / 2, (window.innerHeight - 100) / 2))
+  .force('collide', d3.forceCollide().radius(d => nodeR(d) + 12));
+
+// ---------- links ----------
+const linkSel = g.append('g').selectAll('line')
+  .data(links)
+  .join('line')
+  .attr('class', 'link')
+  .attr('stroke', d => groupColor[nodeMap[d.source.id || d.source]?.group] || '#888')
+  .attr('marker-end', d => `url(#arrow-${nodeMap[d.source.id || d.source]?.group || 'public'})`);
+
+// ---------- nodes ----------
+const nodeSel = g.append('g').selectAll('g')
+  .data(nodes)
+  .join('g')
+  .attr('class', 'node')
+  .call(d3.drag()
+    .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+    .on('drag',  (e, d) => { d.fx = e.x; d.fy = e.y; })
+    .on('end',   (e, d) => { if (!e.active) sim.alphaTarget(0); if (!frozen) { d.fx = null; d.fy = null; } }));
+
+nodeSel.append('circle')
+  .attr('r', nodeR)
+  .attr('fill', d => groupColor[d.group])
+  .attr('stroke', d => d3.color(groupColor[d.group]).brighter(0.8));
+
+nodeSel.append('text')
+  .attr('x', d => nodeR(d) + 4)
+  .text(d => d.label)
+  .attr('font-weight', d => d.group === 'entry' ? 700 : 400);
+
+// ---------- simulation tick ----------
+sim.on('tick', () => {
+  linkSel
+    .attr('x1', d => d.source.x)
+    .attr('y1', d => d.source.y)
+    .attr('x2', d => {
+      const r = nodeR(nodeMap[d.target.id || d.target]);
+      const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
+      const len = Math.sqrt(dx*dx + dy*dy) || 1;
+      return d.target.x - (dx / len) * (r + 8);
+    })
+    .attr('y2', d => {
+      const r = nodeR(nodeMap[d.target.id || d.target]);
+      const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
+      const len = Math.sqrt(dx*dx + dy*dy) || 1;
+      return d.target.y - (dy / len) * (r + 8);
+    });
+
+  nodeSel.attr('transform', d => `translate(${d.x},${d.y})`);
+});
+
+// ---------- zoom / pan ----------
+const zoom = d3.zoom().scaleExtent([0.15, 4])
+  .on('zoom', e => g.attr('transform', e.transform));
+svg.call(zoom);
+
+// ---------- tooltip ----------
+const tooltip = document.getElementById('tooltip');
+
+function showTooltip(e, d) {
+  const inLinks  = links.filter(l => (l.target.id || l.target) === d.id);
+  const outLinks = links.filter(l => (l.source.id || l.source) === d.id);
+  const file = d.id.startsWith('_internal') ? `pydantic/_internal/${d.id.split('/')[1]}.py`
+             : d.id.startsWith('plugin')    ? `pydantic/plugin/${d.id.split('/')[1]}.py`
+             :                                `pydantic/${d.id}.py`;
+  tooltip.innerHTML = `
+    <h3>${d.label}</h3>
+    <div class="tt-row">File: <span>${file}</span></div>
+    ${d.loc ? `<div class="tt-row">Lines: <span>${d.loc.toLocaleString()}</span></div>` : ''}
+    <div class="tt-row">Layer: <span>${d.group}</span></div>
+    <div class="tt-row">Imports: <span>${outLinks.length} outgoing</span></div>
+    <div class="tt-row">Imported by: <span>${inLinks.length} modules</span></div>
+    ${outLinks.length ? `<div class="tt-row" style="margin-top:5px">→ <span>${outLinks.map(l => nodeMap[l.target.id||l.target]?.label).join(', ')}</span></div>` : ''}
+  `;
+  tooltip.style.opacity = 1;
+  moveTooltip(e);
+}
+
+function moveTooltip(e) {
+  const x = e.clientX + 14, y = e.clientY - 10;
+  tooltip.style.left = Math.min(x, window.innerWidth - 300) + 'px';
+  tooltip.style.top  = Math.min(y, window.innerHeight - 180) + 'px';
+}
+
+nodeSel
+  .on('mouseover', showTooltip)
+  .on('mousemove', (e) => moveTooltip(e))
+  .on('mouseout',  () => { tooltip.style.opacity = 0; });
+
+// ---------- click highlight ----------
+let selected = null;
+
+nodeSel.on('click', (e, d) => {
+  e.stopPropagation();
+  if (selected === d.id) { clearHighlight(); return; }
+  selected = d.id;
+
+  const connected = new Set([d.id]);
+  links.forEach(l => {
+    if ((l.source.id || l.source) === d.id) connected.add(l.target.id || l.target);
+    if ((l.target.id || l.target) === d.id) connected.add(l.source.id || l.source);
+  });
+
+  nodeSel.classed('dimmed', n => !connected.has(n.id));
+  linkSel
+    .classed('highlighted', l =>
+      (l.source.id||l.source) === d.id || (l.target.id||l.target) === d.id)
+    .classed('dimmed', l =>
+      !((l.source.id||l.source) === d.id || (l.target.id||l.target) === d.id));
+});
+
+svg.on('click', clearHighlight);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') clearHighlight(); });
+
+function clearHighlight() {
+  selected = null;
+  nodeSel.classed('dimmed', false);
+  linkSel.classed('highlighted', false).classed('dimmed', false);
+}
+
+// ---------- controls ----------
+document.getElementById('strength').addEventListener('input', function() {
+  sim.force('link').distance(+this.value);
+  sim.alpha(0.5).restart();
+});
+
+document.getElementById('charge').addEventListener('input', function() {
+  sim.force('charge').strength(+this.value);
+  sim.alpha(0.5).restart();
+});
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+  svg.transition().duration(600)
+    .call(zoom.transform, d3.zoomIdentity);
+  nodes.forEach(n => { n.fx = null; n.fy = null; });
+  sim.alpha(0.8).restart();
+});
+
+document.getElementById('btn-freeze').addEventListener('click', function() {
+  frozen = !frozen;
+  this.textContent = frozen ? 'Unfreeze layout' : 'Freeze layout';
+  this.style.borderColor = frozen ? '#7c3aed' : '#374151';
+  this.style.color = frozen ? '#a78bfa' : '#cbd5e1';
+  if (frozen) {
+    nodes.forEach(n => { n.fx = n.x; n.fy = n.y; });
+    sim.stop();
+  } else {
+    nodes.forEach(n => { n.fx = null; n.fy = null; });
+    sim.alpha(0.3).restart();
+  }
+});
+
+// ---------- search ----------
+document.getElementById('search').addEventListener('input', function() {
+  const q = this.value.trim().toLowerCase();
+  if (!q) { clearHighlight(); return; }
+  nodeSel.classed('dimmed', d => !d.label.toLowerCase().includes(q) && !d.id.toLowerCase().includes(q));
+  linkSel.classed('dimmed', true).classed('highlighted', false);
+});
+</script>
+</body>
+</html>
